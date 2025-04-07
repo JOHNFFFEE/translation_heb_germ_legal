@@ -1,0 +1,235 @@
+body {
+  font-family: Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  background-color: #f0f0f0;
+}
+
+.container {
+  max-width: 900px;
+  margin: 20px auto;
+  padding: 20px;
+  background-color: #fff;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+}
+
+h1 {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.upload-section {
+  margin-bottom: 20px;
+}
+
+.upload-section label {
+  margin-right: 10px;
+}
+
+.upload-section select,
+.upload-section input[type="file"] {
+  margin-right: 10px;
+  padding: 5px;
+}
+
+.upload-section button {
+  padding: 5px 10px;
+  background-color: #007bff;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+.upload-section button:hover {
+  background-color: #0056b3;
+}
+
+.template-section {
+  margin-bottom: 20px;
+  border: 1px solid #ccc;
+  padding: 10px;
+  background-color: #e6f0fa;
+}
+
+.actions {
+  text-align: center;
+}
+
+.actions button {
+  margin: 0 10px;
+  padding: 5px 10px;
+  background-color: #28a745;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+.actions button:hover {
+  background-color: #218838;
+}
+
+/* Template Styles (from previous templates) */
+.certificate {
+  width: 100%;
+  height: auto;
+  page-break-inside: avoid; /* Prevent page breaks */
+  background-color: #e6f0fa;
+  padding: 20px;
+}
+
+/* Ensure content fits on one page */
+.certificate-content {
+  max-height: 1123px; /* Standard A4 height in pixels at 96dpi */
+  overflow: hidden;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 20px;
+  position: relative;
+}
+
+.reference {
+  position: absolute;
+  right: 0;
+  top: 0;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.ministry,
+.state {
+  font-size: 14px;
+  font-weight: bold;
+  color: #333;
+}
+
+.logo {
+  margin: 10px 0;
+}
+
+.logo img {
+  width: 80px;
+  height: auto;
+}
+
+.title-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 20px 0;
+  margin-bottom: 25px;
+}
+
+.title {
+  font-size: 24px;
+  font-weight: bold;
+  text-align: center;
+  border: 1px solid #000;
+  padding: 10px;
+  background-color: #fff;
+  flex: 1;
+}
+
+.cert-number {
+  font-size: 14px;
+  font-weight: bold;
+  margin-left: 10px;
+}
+
+.content {
+  margin-bottom: 20px;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+  border: 1px solid #000;
+}
+
+.data-table th,
+.data-table td {
+  border: 1px solid #000;
+  padding: 5px;
+  text-align: left;
+}
+
+.data-table th {
+  font-weight: bold;
+  text-align: center;
+  border-bottom: 1px solid #000;
+}
+
+.data-table .label {
+  font-weight: bold;
+}
+
+.data-table .value {
+  text-align: right;
+}
+
+.additional-info {
+  margin-top: 20px;
+  font-size: 12px;
+  text-align: center;
+}
+
+.signature {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.signature-box {
+  position: relative;
+  margin-right: 20px;
+}
+
+.photo-placeholder {
+  width: 80px;
+  height: 100px;
+  background-color: #ddd;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 12px;
+  color: #666;
+  border: 1px solid #000;
+}
+
+.stamp {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 80px;
+  height: 80px;
+  opacity: 0.8;
+}
+
+.signature-placeholder {
+  width: 100px;
+  height: 20px;
+  background-color: #ddd;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 12px;
+  color: #666;
+  border-bottom: 1px solid #000;
+}
+
+.signature-text {
+  margin-top: 5px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.footer {
+  font-size: 10px;
+  margin-top: 20px;
+  text-align: left;
+}

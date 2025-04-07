@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PDF to Template App</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>PDF to Template Converter</h1>
+      <div class="upload-section">
+        <label for="pdf-upload">Upload PDF:</label>
+        <input type="file" id="pdf-upload" accept=".pdf" />
+        <label for="template-select">Select Template:</label>
+        <select id="template-select">
+          <option value="marriage_certificate">Marriage Certificate</option>
+          <option value="divorce_certificate">Divorce Certificate</option>
+          <option value="birth_certificate">
+            Birth Certificate (Hebrew Only)
+          </option>
+          <option value="bilingual_birth_certificate">
+            Birth Certificate (Bilingual)
+          </option>
+          <option value="population_registry_certificate">
+            Population Registry Certificate
+          </option>
+        </select>
+        <button onclick="processPDF()">Process PDF</button>
+      </div>
+      <div class="template-section" id="template-section">
+        <!-- Template will be loaded here -->
+      </div>
+      <div class="actions">
+        <button onclick="addField()">Add Field</button>
+        <button onclick="addRow()">Add Row (table)</button>
+        <!-- <button onclick="exportFullTemplateToPDF()">export german pdf</button> -->
+
+        <button onclick="translateCertificate()">
+          translateCertificate pdf
+        </button>
+
+        <!-- <button onclick="translateToGerman()">Translate to German</button> -->
+        <button onclick="exportToPDF()">Export to PDF</button>
+        <!-- <button onclick="showSummary()">Show Summary</button> -->
+      </div>
+    </div>
+
+    <!-- Libraries -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js"></script>
+    <script src="script.js"></script>
+  </body>
+</html>
