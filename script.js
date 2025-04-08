@@ -41,84 +41,67 @@ let extractedData = {};
 
 // Process the uploaded PDF
 async function processPDF() {
+  const spinner = document.getElementById("spinner");
   const fileInput = document.getElementById("pdf-upload");
   const templateSelect = document.getElementById("template-select");
   const templateSection = document.getElementById("template-section");
 
   if (!fileInput.files.length) {
-    alert("Please upload a PDF file.");
+    alert("Bitte laden Sie eine PDF-Datei hoch.");
     return;
   }
 
-  const file = fileInput.files[0];
-  const reader = new FileReader();
+  if (!spinner) {
+    console.error("Spinner element not found in the DOM.");
+    return;
+  }
 
-  reader.onload = async function () {
-    try {
-      const typedArray = new Uint8Array(reader.result);
-      const pdf = await pdfjsLib.getDocument(typedArray).promise;
-      let fullText = "";
+  spinner.style.display = "block";
 
-      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-        const page = await pdf.getPage(pageNum);
-        const viewport = page.getViewport({ scale: 4.0 }); // Higher scale
-        const canvas = document.createElement("canvas");
-        const context = canvas.getContext("2d");
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
+  try {
+    const file = fileInput.files[0];
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let fullText = "";
 
-        await page.render({
-          canvasContext: context,
-          viewport: viewport,
-        }).promise;
-
-        const imageDataUrl = canvas.toDataURL("image/png");
-        const image = new Image();
-        image.src = imageDataUrl;
-        await new Promise((resolve) => (image.onload = resolve));
-        const tempCanvas = document.createElement("canvas");
-        const tempContext = tempCanvas.getContext("2d");
-        tempCanvas.width = canvas.width;
-        tempCanvas.height = canvas.height;
-        tempContext.drawImage(image, 0, 0);
-        tempContext.filter = "grayscale(100%) contrast(2.0) brightness(1.3)"; // Stronger preprocessing
-        const enhancedImageDataUrl = tempCanvas.toDataURL("image/png");
-
-        const {
-          data: { text },
-        } = await Tesseract.recognize(enhancedImageDataUrl, "heb+eng", {
-          logger: (m) => console.log("OCR Progress (Page " + pageNum + "):", m),
-          tessedit_pageseg_mode: Tesseract.PSM.AUTO, // Auto layout detection
-        });
-        console.log("Raw OCR Text (Page " + pageNum + "):", text);
-        fullText += text + "\n";
-      }
-
-      console.log("Combined Extracted Text:", fullText);
-      extractedData = parseHebrewFields(fullText, templateSelect.value);
-      console.log("Extracted Data after parsing:", extractedData);
-      const templateType = templateSelect.value;
-      const templateHTML = await loadTemplate(templateType);
-      console.log(
-        "Template HTML (first 100 chars):",
-        templateHTML.substring(0, 100)
-      );
-      templateSection.innerHTML = templateHTML;
-      console.log("Template section updated");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      populateTemplate(extractedData);
-      console.log("Population complete");
-    } catch (error) {
-      alert("Error processing PDF: " + error.message);
-      console.error("Processing error:", error);
-      templateSection.innerHTML =
-        "<p>Error loading template. Check console for details.</p>";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map((item) => item.str).join(" ");
+      fullText += pageText + "\n";
     }
-  };
 
-  reader.readAsArrayBuffer(file);
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    const page = await pdf.getPage(1);
+    const viewport = page.getViewport({ scale: 2 });
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    await page.render({ canvasContext: context, viewport }).promise;
+    const imageData = canvas.toDataURL("image/png");
+
+    const {
+      data: { text },
+    } = await Tesseract.recognize(imageData, "heb+eng", {
+      logger: (m) => console.log(m),
+    });
+    fullText = text || fullText;
+
+    console.log("Extracted text:", fullText);
+
+    const templateType = templateSelect.value;
+    extractedData = parseHebrewFields(fullText, templateType);
+
+    const templateHTML = await loadTemplate(templateType);
+    templateSection.innerHTML = templateHTML;
+    populateTemplate(extractedData);
+  } catch (error) {
+    console.error("Fehler beim Verarbeiten des PDFs:", error);
+    alert("Ein Fehler ist aufgetreten. Bitte versuchen Sie es erneut.");
+  } finally {
+    spinner.style.display = "none";
+  }
 }
-
 // Field mapping (expanded for all certificate types)
 const hebrewFieldMap = {
   "שם פרטי": "firstname",
@@ -166,7 +149,6 @@ const valueTranslations = {
   יהודיה: "Jewish",
 };
 
-// Parse fields based on certificate type
 // Parse fields based on certificate type
 function parseHebrewFields(text, templateType) {
   const lines = text
@@ -239,6 +221,7 @@ function parseHebrewFields(text, templateType) {
       .replace("שלהאב", "של האב")
       .replace("שיכיר", "שכיר")
       .replace("חברת ביטות", "חברת ביטוח")
+      .replace("חשמות", "שמות")
       .replace("וקבה", "נקבה");
 
     // Person detection for marriage/divorce
@@ -272,11 +255,75 @@ function parseHebrewFields(text, templateType) {
         "משלח היד של האם",
       ];
 
+      if (
+        line.includes("פרטים אישיים") ||
+        line.includes("הבעל") ||
+        line.includes("האישה") ||
+        line.includes("Personal Details") ||
+        line.includes("Groom") ||
+        line.includes("Bride")
+      ) {
+        // Clean the line by removing non-characters
+        const cleanedLine = line
+          .replace(/[|\.\-:\\]/g, " ") // Replace |, ., -, :, \ with spaces
+          .replace(/\s+/g, " ") // Collapse multiple spaces into one
+          .trim();
+
+        // Family name for groom (Hebrew or English)
+        const groomFamilyMatch =
+          cleanedLine.match(
+            /(שם המשפחה\s+הבעל|הבעל\s+שם המשפחה|Groom\s+Family Name|Family Name\s+Groom)\s+([\u0590-\u05FF]+)/i
+          ) || cleanedLine.match(/הבעל\s+([\u0590-\u05FF]+)/i); // Fallback if "שם המשפחה" is missing
+        if (groomFamilyMatch) {
+          parsedData.groom.previousfamilyname =
+            groomFamilyMatch[groomFamilyMatch.length - 1].trim(); // e.g., "גולדמן"
+          console.log("Groom Family Name:", parsedData.groomFamilyName);
+        }
+
+        // Family name for bride (Hebrew or English)
+        const brideFamilyMatch =
+          cleanedLine.match(
+            /(שם המשפחה\s+האישה|האישה\s+שם המשפחה|Bride\s+Family Name|Family Name\s+Bride)\s+([\u0590-\u05FF]+)/i
+          ) || cleanedLine.match(/האישה\s+([\u0590-\u05FF]+)/i); // Fallback if "שם המשפחה" is missing
+        if (brideFamilyMatch) {
+          parsedData.brideFamilyName =
+            brideFamilyMatch[brideFamilyMatch.length - 1].trim(); // e.g., "גולדברג"
+          console.log("Bride Family Name:", parsedData.brideFamilyName);
+        }
+
+        // First name for groom (if present, Hebrew or English)
+        const groomFirstMatch = cleanedLine.match(
+          /(השם הפרטי\s+הבעל|הבעל\s+השם הפרטי|Groom\s+First Name|First Name\s+Groom)\s+([\u0590-\u05FF]+)/i
+        );
+        if (groomFirstMatch) {
+          parsedData.groom.firstname = groomFirstMatch[2].trim(); // e.g., "משה" (if present)
+          console.log("Groom First Name:", parsedData.groom.firstname);
+        }
+
+        // First name for bride (if present, Hebrew or English)
+        const brideFirstMatch = cleanedLine.match(
+          /(השם הפרטי\s+האישה|האישה\s+השם הפרטי|Bride\s+First Name|First Name\s+Bride)\s+([\u0590-\u05FF]+)/i
+        );
+        if (brideFirstMatch) {
+          parsedData.bride.firstnam = brideFirstMatch[2].trim(); // e.g., "שרה" (if present)
+          console.log("Bride First Name:", parsedData.bride.firstnam);
+        }
+      }
+
+      if (line.includes("תעודת נישואין")) {
+        const certMatch = line.match(/תעודת\s+נישואין\s*[:\-]?\s*(\d+)/i);
+        if (certMatch) {
+          parsedData.certNumber = certMatch[1];
+          console.log("Certificate Number:", parsedData.certNumber);
+        }
+      }
+
       tableLabels.forEach((label) => {
         if (line.includes(label)) {
           const parts = line.split(label);
           if (parts.length > 1) {
             let dataPart = parts[1].trim();
+
             if (label === "השמות הפרטיים") {
               const nameMatch = dataPart.match(/(\S+)\s+(\S+)/);
               if (nameMatch) {
@@ -294,11 +341,13 @@ function parseHebrewFields(text, templateType) {
                   valueTranslations[familyNameMatch[2]] || familyNameMatch[2];
               }
             } else if (label === "מספר הזהות") {
-              // Updated regex to handle dot and space
-              const idMatch = dataPart.match(/(\d{9})\s*\.\s*(\d{9})/);
+              // Updated regex to handle "וה" or spaces as separators
+              const idMatch = dataPart.match(/(\d{9})\s*(?:וה|\s+)\s*(\d{9})/);
               if (idMatch) {
                 parsedData.groom.idnumber = idMatch[1]; // "200376127"
                 parsedData.bride.idnumber = idMatch[2]; // "204661722"
+                console.log("Groom ID:", parsedData.groom.idnumber);
+                console.log("Bride ID:", parsedData.bride.idnumber);
               }
             } else if (label === "תאריך הלידה") {
               // Updated regex to handle special characters and flexible spacing
@@ -343,52 +392,72 @@ function parseHebrewFields(text, templateType) {
                 parsedData.bride.occupation =
                   valueTranslations[occupationMatch[2]] || occupationMatch[2];
               }
-            } else if (label === "האב - שם פרטי ושם משפחה") {
-              // Match two pairs of words (first name + family name) separated by § or spaces
-              const fatherNameMatch = dataPart.match(
-                /(\S+\s+\S+)\s*§?\s*(\S+\s+\S+)/
+            } else if (
+              label === "האב - שם פרטי ומשפחה" ||
+              label === "האב - שם פרטי ושם משפחה"
+            ) {
+              // Clean separators and split
+              const cleanedData = dataPart
+                .replace(/[|:\-]/g, " ")
+                .replace(/\s+/g, " ")
+                .trim();
+              const fatherNameMatch = cleanedData.match(
+                /([\u0590-\u05FF]+(?:\s+[\u0590-\u05FF]+)?)\s+([\u0590-\u05FF]+)/
               );
+
               if (fatherNameMatch) {
-                let groomFatherName = fatherNameMatch[1].trim(); // "אילן טמרסון"
-                let brideFatherName = fatherNameMatch[2].trim(); // "דוד שילה"
                 parsedData.groom.father = parsedData.groom.father || {};
                 parsedData.bride.father = parsedData.bride.father || {};
-                parsedData.groom.father.name =
-                  valueTranslations[groomFatherName] || groomFatherName; // "Ilan Tamerson"
-                parsedData.bride.father.name =
-                  valueTranslations[brideFatherName] || brideFatherName; // "David Shila"
+
+                // Groom's father (first part might include two words like "מנחם מענדל")
+                const groomFatherParts = fatherNameMatch[1].split(/\s+/);
+                parsedData.groom.father.firstName = groomFatherParts[0]; // "מנחם"
+                if (groomFatherParts.length > 1) {
+                  parsedData.groom.father.familyName = groomFatherParts[1]; // "מענדל"
+                }
+
+                // Bride's father (second part)
+                parsedData.bride.father.firstName = fatherNameMatch[2]; // "בנימין"
+
                 console.log(
-                  `Groom's father: ${parsedData.groom.father.name}, Bride's father: ${parsedData.bride.father.name}`
+                  `Groom's father: ${parsedData.groom.father.firstName} ${
+                    parsedData.groom.father.familyName || ""
+                  }`
+                );
+                console.log(
+                  `Bride's father: ${parsedData.bride.father.firstName}`
                 );
               } else {
-                console.log("Failed to match father's names:", dataPart);
-                // Fallback: Try splitting by § or space if the strict pattern fails
-                const fallbackMatch = dataPart.split(/\s*§?\s*/);
-                if (fallbackMatch.length >= 2) {
-                  let groomFatherName = fallbackMatch[0].trim();
-                  let brideFatherName = fallbackMatch[1].trim();
-                  parsedData.groom.father = parsedData.groom.father || {};
-                  parsedData.bride.father = parsedData.bride.father || {};
-                  parsedData.groom.father.name =
-                    valueTranslations[groomFatherName] || groomFatherName;
-                  parsedData.bride.father.name =
-                    valueTranslations[brideFatherName] || brideFatherName;
-                  console.log(
-                    `Fallback - Groom's father: ${parsedData.groom.father.name}, Bride's father: ${parsedData.bride.father.name}`
-                  );
-                }
+                console.log("Failed to match father's names:", cleanedData);
               }
-            } else if (label === "האם - שם פרטי ושם משפחה") {
-              const motherNameMatch = dataPart.match(
-                /(\S+\s+\S+)\s+(\S+\s+\S+)/
+            } else if (
+              label === "האם - שם פרטי ומשפחה" ||
+              label === "האם - שם פרטי ושם משפחה"
+            ) {
+              // Clean separators and split
+              const cleanedData = dataPart
+                .replace(/[|:\-]/g, " ")
+                .replace(/\s+/g, " ")
+                .trim();
+              const motherNameMatch = cleanedData.match(
+                /([\u0590-\u05FF]+)\s+([\u0590-\u05FF]+)/
               );
+
               if (motherNameMatch) {
                 parsedData.groom.mother = parsedData.groom.mother || {};
                 parsedData.bride.mother = parsedData.bride.mother || {};
-                parsedData.groom.mother.name =
-                  valueTranslations[motherNameMatch[1]] || motherNameMatch[1];
-                parsedData.bride.mother.name =
-                  valueTranslations[motherNameMatch[2]] || motherNameMatch[2];
+
+                parsedData.groom.mother.firstName = motherNameMatch[1]; // "אסתר"
+                parsedData.bride.mother.firstName = motherNameMatch[2]; // "טובה"
+
+                console.log(
+                  `Groom's mother: ${parsedData.groom.mother.firstName}`
+                );
+                console.log(
+                  `Bride's mother: ${parsedData.bride.mother.firstName}`
+                );
+              } else {
+                console.log("Failed to match mother's names:", cleanedData);
               }
             } else if (label === "מקום מגורי האב") {
               // Updated regex to split after the first full address (street, number, city)
@@ -601,594 +670,608 @@ function parseHebrewFields(text, templateType) {
           }
         }
       });
+    }
 
-      // Specific parsing for Divorce Certificate
-      if (templateType === "divorce_certificate") {
-        // Define the labels we expect in the table
-        const tableLabels = [
-          "מסי ת. זהות", // ID Number
-          "תאריך לידה", // Date of Birth
-          "מקום מגורים בזמן הגירושין", // Place of Residence at the Time of Divorce
-        ];
+    // Specific parsing for Divorce Certificate
+    if (templateType === "divorce_certificate") {
+      // Define the labels we expect in the table
+      const tableLabels = [
+        "מסי ת. זהות", // ID Number
+        "תאריך לידה", // Date of Birth
+        "מקום מגורים בזמן הגירושין", // Place of Residence at the Time of Divorce
+      ];
 
-        // Reference Number
-        if (line.includes("מסי:")) {
-          const refMatch = line.match(/מסי:\s*(\d+)/);
-          if (refMatch) {
-            parsedData.reference = refMatch[1]; // "1125561"
-          }
+      // Reference Number
+      if (line.includes("מסי:")) {
+        const refMatch = line.match(/מסי:\s*(\d+)/);
+        if (refMatch) {
+          parsedData.reference = refMatch[1]; // "1125561"
         }
+      }
 
-        // Certificate Number
-        if (line.includes("תיק מס'")) {
-          const certMatch = line.match(/תיק מס'\s*(\d+)/);
-          if (certMatch) {
-            parsedData.certNumber = certMatch[1]; // "1323411"
-          }
-        }
+      //   // Certificate Number
+      //   if (line.includes("תיק מס'")) {
+      //     const certMatch = line.match(/תיק מס'\s*(\d+)/);
+      //     if (certMatch) {
+      //       parsedData.certNumber = certMatch[1]; // "1323411"
+      //     }
+      //   }
 
-        // Parse the 3-column table structure
-        tableLabels.forEach((label) => {
-          if (line.includes(label)) {
-            // Split the line into parts based on the label
-            const parts = line.split(label);
-            if (parts.length > 1) {
-              let dataPart = parts[1].trim();
-              if (label === "מסי ת. זהות") {
-                // ID Numbers: "028578920 028430080"
-                const idMatch = dataPart.match(/(\d{9})\s+(\d{9})/);
-                if (idMatch) {
-                  parsedData.wife.idnumber = idMatch[1]; // "028578920"
-                  parsedData.husband.idnumber = idMatch[2]; // "028430080"
-                }
-              } else if (label === "תאריך לידה") {
-                // Dates of Birth: "כייט בסיון התשלייא כייט בטבת התשלייא 22/06/1971 26/01/1971"
-                // Look for the next line to get the Gregorian dates
-                const nextLine = lines[index + 1]
-                  ? lines[index + 1].trim()
-                  : "";
-                const dobMatch =
-                  dataPart.match(
+      // Parse the 3-column table structure
+      tableLabels.forEach((label) => {
+        if (line.includes(label)) {
+          // Split the line into parts based on the label
+          const parts = line.split(label);
+          if (parts.length > 1) {
+            let dataPart = parts[1].trim();
+            if (label === "מסי ת. זהות") {
+              // ID Numbers: "028578920 028430080"
+              const idMatch = dataPart.match(/(\d{9})\s+(\d{9})/);
+              if (idMatch) {
+                parsedData.wife.idnumber = idMatch[1]; // "028578920"
+                parsedData.husband.idnumber = idMatch[2]; // "028430080"
+              }
+            } else if (label === "תאריך לידה") {
+              // Dates of Birth: "כייט בסיון התשלייא כייט בטבת התשלייא 22/06/1971 26/01/1971"
+              // Look for the next line to get the Gregorian dates
+              const nextLine = lines[index + 1] ? lines[index + 1].trim() : "";
+              const dobMatch =
+                dataPart.match(
+                  /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/
+                ) ||
+                (nextLine &&
+                  nextLine.match(
                     /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/
-                  ) ||
-                  (nextLine &&
-                    nextLine.match(
-                      /(\d{2}\/\d{2}\/\d{4})\s+(\d{2}\/\d{2}\/\d{4})/
-                    ));
-                if (dobMatch) {
-                  parsedData.wife.dateofbirth = dobMatch[1]; // "22/06/1971"
-                  parsedData.husband.dateofbirth = dobMatch[2]; // "26/01/1971"
-                }
-              } else if (label === "מקום מגורים בזמן הגירושין") {
-                // Addresses: "שד וינגיט 27/21 חיפה הנשר 3/2 חיפה"
-                // Split by "חיפה" to separate the two addresses
-                const addressParts = dataPart.split("חיפה");
-                if (addressParts.length >= 2) {
-                  // Wife's address: "שד וינגיט 27/21 חיפה"
-                  let wifeAddress = addressParts[0].trim() + " חיפה";
-                  wifeAddress = wifeAddress
-                    .split(/\s+/)
-                    .map((part) => valueTranslations[part] || part)
-                    .join(" "); // Translate parts
-                  parsedData.wife.address = wifeAddress; // "Sderot Wingate 27/21 Haifa"
+                  ));
+              if (dobMatch) {
+                parsedData.wife.dateofbirth = dobMatch[1]; // "22/06/1971"
+                parsedData.husband.dateofbirth = dobMatch[2]; // "26/01/1971"
+              }
+            } else if (label === "מקום מגורים בזמן הגירושין") {
+              // Addresses: "שד וינגיט 27/21 חיפה הנשר 3/2 חיפה"
+              // Split by "חיפה" to separate the two addresses
+              const addressParts = dataPart.split("חיפה");
+              if (addressParts.length >= 2) {
+                // Wife's address: "שד וינגיט 27/21 חיפה"
+                let wifeAddress = addressParts[0].trim() + " חיפה";
+                wifeAddress = wifeAddress
+                  .split(/\s+/)
+                  .map((part) => valueTranslations[part] || part)
+                  .join(" "); // Translate parts
+                parsedData.wife.address = wifeAddress; // "Sderot Wingate 27/21 Haifa"
 
-                  // Husband's address: "הנשר 3/2 חיפה"
-                  let husbandAddress = addressParts[1].trim() + " חיפה";
-                  husbandAddress = husbandAddress
-                    .split(/\s+/)
-                    .map((part) => valueTranslations[part] || part)
-                    .join(" "); // Translate parts
-                  parsedData.husband.address = husbandAddress; // "Hanesher 3/2 Haifa"
-                }
+                // Husband's address: "הנשר 3/2 חיפה"
+                let husbandAddress = addressParts[1].trim() + " חיפה";
+                husbandAddress = husbandAddress
+                  .split(/\s+/)
+                  .map((part) => valueTranslations[part] || part)
+                  .join(" "); // Translate parts
+                parsedData.husband.address = husbandAddress; // "Hanesher 3/2 Haifa"
               }
             }
           }
-        });
-
-        // Husband’s Name in Get (Alias)
-        if (line.includes("השם המופיע בגט")) {
-          const nameMatch = line.match(/השם המופיע בגט \(אם שונה\)\s+(\S+)/);
-          if (nameMatch) {
-            parsedData.husband.alias =
-              valueTranslations[nameMatch[1]] || nameMatch[1]; // "David"
-          }
         }
+      });
 
-        // Husband’s Father
-        if (line.includes("מימון בן אליהו")) {
-          parsedData.husband.fathersname = "Maimon Ben Eliyahu";
-        }
-
-        // Husband’s Occupation (משלח ידו)
-        if (line.includes("משלח ידו")) {
-          const occupationMatch = line.match(/משלח ידו:\s*(\S+)/);
-          if (occupationMatch) {
-            parsedData.husband.occupation =
-              valueTranslations[occupationMatch[1]] || occupationMatch[1]; // "עד" (Witness, possibly an OCR error)
-          }
-        }
-
-        // Witness B (עד ב')
-        if (line.includes("עד ב'")) {
-          const witnessBMatch = line.match(/עד ב'\s*\|\s*(\S+\s+\S+\s+\S+)/);
-          if (witnessBMatch) {
-            parsedData.witnessB =
-              valueTranslations[witnessBMatch[1]] || witnessBMatch[1]; // "Maimon Ben Eliyahu"
-          } else {
-            parsedData.witnessB = "Witness B"; // Fallback if name not found
-          }
-        }
-
-        // Witness (עד)
-        if (
-          line.includes("עד") &&
-          !line.includes("עד ב'") &&
-          !line.includes("משלח ידו")
-        ) {
-          parsedData.witness = "Witness"; // We don’t have a name, just the role
-        }
-
-        // Get Written Date
-        if (line.includes("הגט נכתב")) {
-          const dateMatch = line.match(/\((\d{2}\/\d{2}\/\d{4})\)/);
-          if (dateMatch) {
-            parsedData.getWrittenDate = dateMatch[1]; // "11/07/2021"
-          }
-        }
-
-        // Husband and Wife Names and Family Name
-        if (line.includes("הגירושין נרשמו")) {
-          // Extract names: "גל גולדשמידט, דניאל גולדשמידט"
-          const nameMatch = line.match(/גל גולדשמידט,\s*דניאל גולדשמידט/);
-          if (nameMatch) {
-            parsedData.husband.firstname = valueTranslations["גל"] || "Gal";
-            parsedData.wife.firstname = valueTranslations["דניאל"] || "Daniel";
-            parsedData.husband.familyname =
-              valueTranslations["גולדשמידט"] || "Goldschmidt";
-            parsedData.wife.familyname =
-              valueTranslations["גולדשמידט"] || "Goldschmidt";
-          }
-        }
-
-        // Husband and Wife Names and Family Name after "סידורי גיטין"
-        if (line.includes("סידורי גיטין")) {
-          const nameMatch = line.match(
-            /סידורי גיטין,\s*(\S+)\s+(\S+),\s*(\S+)\s+(\S+)/
-          );
-          if (nameMatch) {
-            const husbandFirstName = nameMatch[1]; // First name of husband
-            const husbandFamilyName = nameMatch[2]; // Family name of husband
-            const wifeFirstName = nameMatch[3]; // First name of wife
-            const wifeFamilyName = nameMatch[4]; // Family name of wife
-
-            parsedData.husband.firstname =
-              valueTranslations[husbandFirstName] || husbandFirstName;
-            parsedData.husband.familyname =
-              valueTranslations[husbandFamilyName] || husbandFamilyName;
-            parsedData.wife.firstname =
-              valueTranslations[wifeFirstName] || wifeFirstName;
-            parsedData.wife.familyname =
-              valueTranslations[wifeFamilyName] || wifeFamilyName;
-          }
-        }
-
-        // Marital Status (inferred as "Divorced")
-        if (line.includes("הגירושין")) {
-          parsedData.husband.maritalstatus = "Divorced";
-          parsedData.wife.maritalstatus = "Divorced";
-        }
-
-        // Place of Registration
-        if (line.includes("בית הדין הרבני אזורי חיפה")) {
-          parsedData.placeofregistration = "Haifa Regional Rabbinical Court";
-        }
-
-        // Registration Date
-        if (line.includes("הגירושין נרשמו")) {
-          const regDateMatch = line.match(/\((\d{2}\/\d{2}\/\d{4})\)/);
-          if (regDateMatch) {
-            parsedData.registrationdate = regDateMatch[1]; // "11/07/2021"
-          }
-        }
-
-        // Date Issued
-        if (line.includes("נחתם דיגיטלית")) {
-          const dateIssuedMatch = line.match(/(\d{2}\/\d{2}\/\d{4})/);
-          if (dateIssuedMatch) {
-            parsedData.dateissued = dateIssuedMatch[1]; // "11/07/2021"
-          }
-        }
-
-        // Issue Time
-        if (line.includes(":")) {
-          const timeMatch = line.match(/(\d{2}\s*:\s*\d{2})/);
-          if (timeMatch) {
-            parsedData.issuetime = timeMatch[1].replace(/\s*/g, ""); // "13:34"
-          }
-        }
-      }
-      // Specific parsing for Population Registry Certificate
-      if (templateType === "population_registry_certificate") {
-        line = line
-          .replace(/שלהאב/g, "שם האב")
-          .replace(/להודי/g, "יהודי")
-          .replace(/שלהאם/g, "שם האם")
-          .replace(/המשפתה/g, "המשפחה");
-
-        const englishFields = {
-          "First Name": "firstname",
-          "Last Name": "familyname",
-          "Father's Name": "fathersname",
-          "Mother's Name": "mothersname",
-          Gender: "gender",
-          "Marital Status": "maritalstatus",
-          "Date of Birth": "dateofbirth",
-          "Country of Birth": "countryofbirth",
-          "Date of Registration": "dateofregistration",
-          "Registration Number": "registrationnumber",
-          "ID Number": "idnumber",
-          "Aliyah Date": "aliyahdate",
-          "Date Issued": "dateissued",
-          Deceased: "dateofdeath",
-          Nationality: "nationality",
-          Lawyer: "lawyer",
-        };
-
-        // // Hebrew-specific parsing for Population Registry Certificate
-        //       // Name (שם המשפחה and שם הפרטי on the same line)
-        //       if (line.includes("שם המשפחה") && line.includes("שם הפרטי")) {
-        //         const nameMatch = line.match(/שם המשפחה\s*(\S+)\s*שם הפרטי\s*(\S+)/i);
-        //         if (nameMatch) {
-        //           parsedData.familyname =  nameMatch[1];
-        //           parsedData.firstname = nameMatch[2];
-        //         }
-        //       }
-
-        // Hebrew-specific parsing for Population Registry Certificate
-        // Family Name
-        if (line.includes("שם המשפחה")) {
-          const familyNameMatch = line.match(/שם המשפחה\s*(\S+)/i);
-          if (familyNameMatch) {
-            parsedData.familyname =
-              valueTranslations[familyNameMatch[1]] || familyNameMatch[1];
-          }
-        }
-
-        // First Name
-        if (line.includes(" השם הפרטי ")) {
-          const firstNameMatch = line.match(/ השם הפרטי s*(\S+)/i);
-          if (firstNameMatch) {
-            parsedData.firstname =
-              valueTranslations[firstNameMatch[1]] || firstNameMatch[1];
-          }
-        }
-
-        // Lawyer
-        if (line.includes("לכבוד")) {
-          const firstNameMatch = line.match(/לכבודs*(\S+)/i);
-          if (firstNameMatch) {
-            parsedData.lawyer = firstNameMatch[1];
-          } else if (lines[index + 1] && !lines[index + 1].includes("לכבוד")) {
-            parsedData.lawyer = lines[index + 1];
-          }
-        }
-
-        // Father's Name
-        if (line.includes("שם האב")) {
-          const fatherMatch = line.match(/שם האב\s+(\S+)/);
-          if (fatherMatch) {
-            parsedData.fathersname = fatherMatch[1];
-          }
-        }
-
-        //ID Number  -- important
-        if (line.includes("של האם")) {
-          const motherMatch = line.match(/שם האם\s*(\S+)/);
-          if (motherMatch) {
-            // Apply the numeric regex to the captured group (motherMatch[1])
-            const idMatch = motherMatch[1].match(/\d{6,9}(?:\s*\d)?/g);
-            if (idMatch && idMatch.length > 0) {
-              parsedData.idnumber = idMatch[0].replace(/\s/g, "");
-              parsedData.idnumber = idMatch[1].replace(/\s/g, "");
-            }
-          } else if (lines[index + 1] && !lines[index + 1].includes("שם")) {
-            parsedData.idnumber =
-              valueTranslations[lines[index + 1]] || lines[index + 1];
-          }
-        }
-
-        if (line.includes("המין")) {
-          const genderMatch = line.match(/המין\s*(נקבה|זכר)/i);
-          if (genderMatch)
-            parsedData.gender =
-              valueTranslations[genderMatch[1]] || genderMatch[1];
-        }
-
-        if (line.includes("של האם")) {
-          const motherMatch = line.match(/של האם\s*(\S+)/);
-          if (motherMatch) {
-            parsedData.mothersname = motherMatch[1]; // This would be a number, not a name
-          } else if (lines[index + 1] && !lines[index + 1].includes("שם")) {
-            parsedData.mothersname =
-              valueTranslations[lines[index + 1]] || lines[index + 1];
-          }
-        }
-
-        // // Gender and ID Number (on the same line)
-        // if (line.includes("מספר הזהות") ||  line.includes("המין"))  {
-        //   // Extract Gender
-        //   const genderMatch = line.match(/המין\s*(זכר|נקבה)/i);
-        //   if (genderMatch) {
-        //     parsedData.gender = valueTranslations[genderMatch[1]] || genderMatch[1];
-        //   }
-        //   // Extract ID Number
-        //   const idMatch = line.match(/(\d+\s*\d*)\s*\\?\s*מספר הזהות/);
-        //   if (idMatch) {
-        //     parsedData.idnumber = idMatch[1].replace(/\s/g, ""); // Remove spaces to get "000416586"
-        //   }
-        // }
-
-        // Marital Status
-        if (line.includes("המצב האישי")) {
-          const statusMatch = line.match(/המצב האישי\s*(\S+)/);
-          if (statusMatch) {
-            parsedData.maritalstatus = statusMatch[1];
-          }
-        }
-
-        // Country of Birth
-        if (line.includes("ארץ הלידה")) {
-          const countryMatch = line.match(/ארץ הלידה\s*(\S+)/);
-          if (countryMatch) {
-            parsedData.countryofbirth = countryMatch[1];
-          }
-        }
-
-        // Date of Birth (Hebrew and Gregorian)
-        if (line.includes("הגריגוריאני")) {
-          const nextLine = lines[index + 1] || "";
-          const gregorianMatch = nextLine.match(
-            /הגריגוריאני\s*(\d{1,2})\s*ב(\S+)\s*(\d{4})/
-          );
-          if (gregorianMatch) {
-            const day = gregorianMatch[1];
-            const monthHebrew = gregorianMatch[2];
-            const year = gregorianMatch[3];
-            const month = valueTranslations[monthHebrew] || monthHebrew;
-            parsedData.dateofbirth = `${day} ${month} ${year}`;
-          }
-          const hebrewMatch = nextLine.match(/העברי\s*(\S+\s+\S+\s+\S+)/);
-          if (hebrewMatch) {
-            parsedData.dateofbirth_hebrew = hebrewMatch[1].trim();
-          }
-        }
-
-        // Date of Registration and Aliyah Date
-        if (line.includes("תאריך רישום")) {
-          const regMatch = line.match(
-            /תאריך רישום\s*כעולה\/ישיבת קבע\s*(\S+)\s*(\d{4})/
-          );
-          if (regMatch) {
-            const monthHebrew = regMatch[1];
-            const year = regMatch[2];
-            const month = valueTranslations[monthHebrew] || monthHebrew;
-            const dateValue = `${month} ${year}`;
-            parsedData.dateofregistration = dateValue;
-            parsedData.aliyahdate = dateValue; // Set aliyahdate to the same value
-          }
-        }
-
-        // Nationality
-        if (line.includes("הלאום")) {
-          const nationalityMatch = line.match(/הלאום\s*(\S+)/);
-          if (nationalityMatch) {
-            parsedData.nationality =
-              valueTranslations[nationalityMatch[1]] || nationalityMatch[1];
-          }
-        }
-
-        // Date of Death
-        if (line.includes("נפטר")) {
-          const deceasedMatch = line.match(
-            /נפטר\s*(\d{1,2})\s*ב(\S+)\s*(\d{4})/
-          );
-          if (deceasedMatch) {
-            const day = deceasedMatch[1];
-            const monthHebrew = deceasedMatch[2];
-            const year = deceasedMatch[3];
-            const month = valueTranslations[monthHebrew] || monthHebrew;
-            parsedData.dateofdeath = `${day} ${month} ${year}`;
-          }
-        }
-
-        // Address
-        if (line.includes("המען")) {
-          const addressMatch = line.match(/המען\s*:\s*(.+)/);
-          if (addressMatch) {
-            let address = addressMatch[1].trim();
-            // Split address into components
-            const addressParts = address.split(/\s+/);
-            if (addressParts.length >= 4) {
-              const city =
-                valueTranslations[addressParts[0]] || addressParts[0];
-              const street = addressParts[1];
-              const number = addressParts[2];
-              const apartment =
-                valueTranslations[addressParts[3]] || addressParts[3];
-              address = `${city}, ${street} ${number}, ${apartment}`;
-            }
-            parsedData.address = address;
-          }
-        }
-
-        // Date of Address Entry
-        if (line.includes("תאריך הכניסה למען")) {
-          const addressEntryMatch = line.match(
-            /תאריך הכניסה למען\s*:\s*(\d{1,2})\s*ב(\S+)/
-          );
-          if (addressEntryMatch) {
-            const day = addressEntryMatch[1];
-            const monthHebrew = addressEntryMatch[2];
-            const month = valueTranslations[monthHebrew] || monthHebrew;
-            // Look for the year in the next line or previous line
-            const yearMatch =
-              lines[index + 1]?.match(/(\d{4})/) ||
-              lines[index - 1]?.match(/(\d{4})/);
-            const year = yearMatch ? yearMatch[1] : "";
-            parsedData.addressentrydate = `${day} ${month} ${year}`;
-          }
-        }
-
-        // Previous Family Name
-        if (line.includes("שמות משפחה קודמים")) {
-          const prevNameMatch = lines[index + 2]?.match(
-            /(\S+)\s+שינוי\s+(\d{1,2})\s+ב(\S+)\s+(\d{4})/
-          );
-          if (prevNameMatch) {
-            const name =
-              valueTranslations[prevNameMatch[1]] || prevNameMatch[1];
-            const day = prevNameMatch[2];
-            const monthHebrew = prevNameMatch[3];
-            const year = prevNameMatch[4];
-            const month = valueTranslations[monthHebrew] || monthHebrew;
-            parsedData.previousfamilyname = `${name} (changed on ${day} ${month} ${year})`;
-          }
-        }
-
-        // Date Issued
-        if (line.includes("בתאריך")) {
-          const dateIssuedMatch = line.match(/(\d{1,2})\s*ב(\S+)\s*(\d{4})/);
-          if (dateIssuedMatch) {
-            const day = dateIssuedMatch[1];
-            const monthHebrew = dateIssuedMatch[2];
-            const year = dateIssuedMatch[3];
-            const month = valueTranslations[monthHebrew] || monthHebrew;
-            parsedData.dateissued = `${day} ${month} ${year}`;
-          }
-        }
-
-        // Place of Registration
-        if (line.includes("בלשכת רשות האוכלוסין")) {
-          const placeMatch = line.match(/בלשכת רשות האוכלוסין וההגירה ב(.+)/);
-          if (placeMatch) {
-            parsedData.placeofregistration =
-              valueTranslations[placeMatch[1].trim()] || placeMatch[1].trim();
-          }
-        }
-        // Reference
-        if (line.match(/\d{5,}/)) {
-          parsedData.reference = line.match(/\d{5,}/)[0];
+      // Husband’s Name in Get (Alias)
+      if (line.includes("השם המופיע בגט")) {
+        const nameMatch = line.match(/השם המופיע בגט \(אם שונה\)\s+(\S+)/);
+        if (nameMatch) {
+          parsedData.husband.alias =
+            valueTranslations[nameMatch[1]] || nameMatch[1]; // "David"
         }
       }
 
-      // Hebrew-specific parsing for birth certificate
-      if (templateType === "birth_certificate") {
-        if (line.includes("שם משפחה") || line.includes("השם הפרטי")) {
-          const parts = line.split("|").map((part) => part.trim());
-          if (parts.length > 1) {
-            const namePart = parts[1];
-            const nameSplit = namePart.split(/\s+/);
-            parsedData.familyname = nameSplit[0];
-            const firstNamePart = namePart
-              .replace("השם הפרטי", "")
-              .replace(parsedData.familyname, "")
-              .trim();
-            parsedData.firstname =
-              firstNamePart || nameSplit.slice(1).join(" ");
+      // Husband’s Occupation (משלח ידו)
+      if (line.includes("משלח ידו")) {
+        const occupationMatch = line.match(/משלח ידו:\s*(\S+)/);
+        if (occupationMatch) {
+          parsedData.husband.occupation =
+            valueTranslations[occupationMatch[1]] || occupationMatch[1]; // "עד" (Witness, possibly an OCR error)
+        }
+      }
+
+      // Witness B (עד ב')
+      if (line.includes("עד ב'")) {
+        const witnessBMatch = line.match(/עד ב'\s*\|\s*(\S+\s+\S+\s+\S+)/);
+        if (witnessBMatch) {
+          parsedData.witnessB =
+            valueTranslations[witnessBMatch[1]] || witnessBMatch[1]; // "Maimon Ben Eliyahu"
+        } else {
+          parsedData.witnessB = "Witness B"; // Fallback if name not found
+        }
+      }
+
+      // Witness (עד)
+      if (
+        line.includes("עד") &&
+        !line.includes("עד ב'") &&
+        !line.includes("משלח ידו")
+      ) {
+        parsedData.witness = "Witness"; // We don’t have a name, just the role
+      }
+
+      // Get Written Date
+      if (line.includes("הגט נכתב")) {
+        const dateMatch = line.match(/\((\d{2}\/\d{2}\/\d{4})\)/);
+        if (dateMatch) {
+          parsedData.getWrittenDate = dateMatch[1]; // "11/07/2021"
+        }
+      }
+
+      // Husband and Wife Names and Family Name
+      if (line.includes("הגירושין נרשמו")) {
+        // Extract names: "גל גולדשמידט, דניאל גולדשמידט"
+        const nameMatch = line.match(/גל גולדשמידט,\s*דניאל גולדשמידט/);
+        if (nameMatch) {
+          parsedData.husband.firstname = valueTranslations["גל"] || "Gal";
+          parsedData.wife.firstname = valueTranslations["דניאל"] || "Daniel";
+          parsedData.husband.familyname =
+            valueTranslations["גולדשמידט"] || "Goldschmidt";
+          parsedData.wife.familyname =
+            valueTranslations["גולדשמידט"] || "Goldschmidt";
+        }
+      }
+
+      // Husband and Wife Names and Family Name after "סידורי גיטין"
+      if (line.includes("סידורי גיטין")) {
+        const nameMatch = line.match(
+          /סידורי גיטין,\s*(\S+)\s+(\S+),\s*(\S+)\s+(\S+)/
+        );
+        if (nameMatch) {
+          const husbandFirstName = nameMatch[1]; // First name of husband
+          const husbandFamilyName = nameMatch[2]; // Family name of husband
+          const wifeFirstName = nameMatch[3]; // First name of wife
+          const wifeFamilyName = nameMatch[4]; // Family name of wife
+
+          parsedData.husband.firstname =
+            valueTranslations[husbandFirstName] || husbandFirstName;
+          parsedData.husband.familyname =
+            valueTranslations[husbandFamilyName] || husbandFamilyName;
+          parsedData.wife.firstname =
+            valueTranslations[wifeFirstName] || wifeFirstName;
+          parsedData.wife.familyname =
+            valueTranslations[wifeFamilyName] || wifeFamilyName;
+        }
+      }
+
+      // Marital Status (inferred as "Divorced")
+      if (line.includes("הגירושין")) {
+        parsedData.husband.maritalstatus = "Divorced";
+        parsedData.wife.maritalstatus = "Divorced";
+      }
+
+      // Place of Registration
+      if (line.includes("בית הדין הרבני אזורי חיפה")) {
+        parsedData.placeofregistration = "Haifa Regional Rabbinical Court";
+      }
+
+      // Registration Date
+      if (line.includes("הגירושין נרשמו")) {
+        const regDateMatch = line.match(/\((\d{2}\/\d{2}\/\d{4})\)/);
+        if (regDateMatch) {
+          parsedData.registrationdate = regDateMatch[1]; // "11/07/2021"
+        }
+      }
+
+      // Date Issued
+      if (line.includes("נחתם דיגיטלית")) {
+        const dateIssuedMatch = line.match(/(\d{2}\/\d{2}\/\d{4})/);
+        if (dateIssuedMatch) {
+          parsedData.dateissued = dateIssuedMatch[1]; // "11/07/2021"
+        }
+      }
+
+      // Issue Time
+      if (line.includes(":")) {
+        const timeMatch = line.match(/(\d{2}\s*:\s*\d{2})/);
+        if (timeMatch) {
+          parsedData.issuetime = timeMatch[1].replace(/\s*/g, ""); // "13:34"
+        }
+      }
+    }
+    // Specific parsing for Population Registry Certificate
+    if (templateType === "population_registry_certificate") {
+      line = line
+        .replace(/שלהאב/g, "שם האב")
+        .replace(/להודי/g, "יהודי")
+        .replace(/שלהאם/g, "שם האם")
+        .replace(/המשפתה/g, "המשפחה");
+
+      const englishFields = {
+        "First Name": "firstname",
+        "Last Name": "familyname",
+        "Father's Name": "fathersname",
+        "Mother's Name": "mothersname",
+        Gender: "gender",
+        "Marital Status": "maritalstatus",
+        "Date of Birth": "dateofbirth",
+        "Country of Birth": "countryofbirth",
+        "Date of Registration": "dateofregistration",
+        "Registration Number": "registrationnumber",
+        "ID Number": "idnumber",
+        "Aliyah Date": "aliyahdate",
+        "Date Issued": "dateissued",
+        Deceased: "dateofdeath",
+        Nationality: "nationality",
+        Lawyer: "lawyer",
+      };
+
+      // // Hebrew-specific parsing for Population Registry Certificate
+      //       // Name (שם המשפחה and שם הפרטי on the same line)
+      //       if (line.includes("שם המשפחה") && line.includes("שם הפרטי")) {
+      //         const nameMatch = line.match(/שם המשפחה\s*(\S+)\s*שם הפרטי\s*(\S+)/i);
+      //         if (nameMatch) {
+      //           parsedData.familyname =  nameMatch[1];
+      //           parsedData.firstname = nameMatch[2];
+      //         }
+      //       }
+
+      // Hebrew-specific parsing for Population Registry Certificate
+      // Family Name
+      if (line.includes("שם המשפחה")) {
+        const familyNameMatch = line.match(/שם המשפחה\s*(\S+)/i);
+        if (familyNameMatch) {
+          parsedData.familyname =
+            valueTranslations[familyNameMatch[1]] || familyNameMatch[1];
+        }
+      }
+
+      // First Name
+      if (line.includes(" השם הפרטי ")) {
+        const firstNameMatch = line.match(/ השם הפרטי s*(\S+)/i);
+        if (firstNameMatch) {
+          parsedData.firstname =
+            valueTranslations[firstNameMatch[1]] || firstNameMatch[1];
+        }
+      }
+
+      // Lawyer
+      if (line.includes("לכבוד")) {
+        const firstNameMatch = line.match(/לכבודs*(\S+)/i);
+        if (firstNameMatch) {
+          parsedData.lawyer = firstNameMatch[1];
+        } else if (lines[index + 1] && !lines[index + 1].includes("לכבוד")) {
+          parsedData.lawyer = lines[index + 1];
+        }
+      }
+
+      // Father's Name
+      if (line.includes("שם האב")) {
+        const fatherMatch = line.match(/שם האב\s+(\S+)/);
+        if (fatherMatch) {
+          parsedData.fathersname = fatherMatch[1];
+        }
+      }
+
+      //ID Number  -- important
+      if (line.includes("של האם")) {
+        const motherMatch = line.match(/שם האם\s*(\S+)/);
+        if (motherMatch) {
+          // Apply the numeric regex to the captured group (motherMatch[1])
+          const idMatch = motherMatch[1].match(/\d{6,9}(?:\s*\d)?/g);
+          if (idMatch && idMatch.length > 0) {
+            parsedData.idnumber = idMatch[0].replace(/\s/g, "");
+            parsedData.idnumber = idMatch[1].replace(/\s/g, "");
           }
+        } else if (lines[index + 1] && !lines[index + 1].includes("שם")) {
+          parsedData.idnumber =
+            valueTranslations[lines[index + 1]] || lines[index + 1];
         }
+      }
 
-        if (line.includes("של האב ")) {
-          const fatherMatch = line.match(/של האב\s+(\S+)/);
-          if (fatherMatch) parsedData.fathersname = fatherMatch[1];
+      if (line.includes("המין")) {
+        const genderMatch = line.match(/המין\s*(נקבה|זכר)/i);
+        if (genderMatch)
+          parsedData.gender =
+            valueTranslations[genderMatch[1]] || genderMatch[1];
+      }
+
+      if (line.includes("של האם")) {
+        const motherMatch = line.match(/של האם\s*(\S+)/);
+        if (motherMatch) {
+          parsedData.mothersname = motherMatch[1]; // This would be a number, not a name
+        } else if (lines[index + 1] && !lines[index + 1].includes("שם")) {
+          parsedData.mothersname =
+            valueTranslations[lines[index + 1]] || lines[index + 1];
         }
+      }
 
-        if (line.includes("של האם")) {
-          const motherMatch = line.match(/של האם\s*(\S+)/);
-          if (motherMatch) parsedData.mothersname = motherMatch[1];
+      // // Gender and ID Number (on the same line)
+      // if (line.includes("מספר הזהות") ||  line.includes("המין"))  {
+      //   // Extract Gender
+      //   const genderMatch = line.match(/המין\s*(זכר|נקבה)/i);
+      //   if (genderMatch) {
+      //     parsedData.gender = valueTranslations[genderMatch[1]] || genderMatch[1];
+      //   }
+      //   // Extract ID Number
+      //   const idMatch = line.match(/(\d+\s*\d*)\s*\\?\s*מספר הזהות/);
+      //   if (idMatch) {
+      //     parsedData.idnumber = idMatch[1].replace(/\s/g, ""); // Remove spaces to get "000416586"
+      //   }
+      // }
+
+      // Marital Status
+      if (line.includes("המצב האישי")) {
+        const statusMatch = line.match(/המצב האישי\s*(\S+)/);
+        if (statusMatch) {
+          parsedData.maritalstatus = statusMatch[1];
         }
+      }
 
-        if (line.includes("שלאבי האב ")) {
-          const grandfatherMatch = line.match(/שלאבי האב \s*(\S+)/);
-          if (grandfatherMatch)
-            parsedData.grandfathername = grandfatherMatch[1];
-          else if (line.includes("שלאבי האב "))
-            parsedData.grandfathername = lines[index]
-              ?.replace("שלאבי האב ", "")
-              .trim();
+      // Country of Birth
+      if (line.includes("ארץ הלידה")) {
+        const countryMatch = line.match(/ארץ הלידה\s*(\S+)/);
+        if (countryMatch) {
+          parsedData.countryofbirth = countryMatch[1];
         }
+      }
 
-        if (line.includes("המין")) {
-          const genderMatch = line.match(/המין\s*(נקבה|זכר)/i);
-          if (genderMatch)
-            parsedData.gender =
-              valueTranslations[genderMatch[1]] || genderMatch[1];
-
-          const idMatch = line.match(/מספר הזהות\s*(\d{7,9}|\d+\s*\d*)/);
-          if (idMatch) parsedData.idnumber = idMatch[1];
+      // Date of Birth (Hebrew and Gregorian)
+      if (line.includes("הגריגוריאני")) {
+        const nextLine = lines[index + 1] || "";
+        const gregorianMatch = nextLine.match(
+          /הגריגוריאני\s*(\d{1,2})\s*ב(\S+)\s*(\d{4})/
+        );
+        if (gregorianMatch) {
+          const day = gregorianMatch[1];
+          const monthHebrew = gregorianMatch[2];
+          const year = gregorianMatch[3];
+          const month = valueTranslations[monthHebrew] || monthHebrew;
+          parsedData.dateofbirth = `${day} ${month} ${year}`;
         }
-
-        if (line.includes("שם הישוב")) {
-          const placeMatch = line.match(/שם הישוב\s*(.+?)(?=שם בית|$)/);
-          if (placeMatch) parsedData.placeofbirth = placeMatch[1].trim();
+        const hebrewMatch = nextLine.match(/העברי\s*(\S+\s+\S+\s+\S+)/);
+        if (hebrewMatch) {
+          parsedData.dateofbirth_hebrew = hebrewMatch[1].trim();
         }
+      }
 
-        if (line.includes("שם בית החולים")) {
-          const hospitalMatch = line.match(/שם בית החולים\s*(.+)/);
-          if (hospitalMatch)
-            parsedData.hospitalname = hospitalMatch[1].trim().replace("\\", "");
+      // Date of Registration and Aliyah Date
+      if (line.includes("תאריך רישום")) {
+        const regMatch = line.match(
+          /תאריך רישום\s*כעולה\/ישיבת קבע\s*(\S+)\s*(\d{4})/
+        );
+        if (regMatch) {
+          const monthHebrew = regMatch[1];
+          const year = regMatch[2];
+          const month = valueTranslations[monthHebrew] || monthHebrew;
+          const dateValue = `${month} ${year}`;
+          parsedData.dateofregistration = dateValue;
+          parsedData.aliyahdate = dateValue; // Set aliyahdate to the same value
         }
+      }
 
-        if (line.includes("תאריך הלידה")) {
-          const gregorianMatch = lines[index + 1]?.match(
-            /הגריגוריאני\s*(\d{1,2})\s*ב(\S+)\s*(\d{4})/
-          );
-          if (gregorianMatch) {
-            const day = gregorianMatch[1];
-            const monthHebrew = gregorianMatch[2];
-            const year = gregorianMatch[3];
-            const monthMap = {
-              ינואר: "January",
-              פברואר: "February",
-              מרץ: "March",
-              אפריל: "April",
-              מאי: "May",
-              יוני: "June",
-              יולי: "July",
-              אוגוסט: "August",
-              ספטמבר: "September",
-              אוקטובר: "October",
-              נובמבר: "November",
-              דצמבר: "December",
-            };
-            const month = monthMap[monthHebrew] || monthHebrew;
-            parsedData.dateofbirth = `${day} ${month} ${year}`;
+      // Nationality (default to יהודי if not found)
+      if (line.includes("הלאום")) {
+        const nationalityMatch = line.match(/הלאום\s*[:\-]?\s*(\S+)/i);
+        if (nationalityMatch) {
+          parsedData.nationality = nationalityMatch[1];
+        }
+      }
+      // Enforce fallback at the end of parsing
+      if (!parsedData.nationality) {
+        parsedData.nationality = "יהודי";
+      }
+
+      // Date of Death
+      if (line.includes("נפטר")) {
+        const deceasedMatch = line.match(/נפטר\s*(\d{1,2})\s*ב(\S+)\s*(\d{4})/);
+        if (deceasedMatch) {
+          const day = deceasedMatch[1];
+          const monthHebrew = deceasedMatch[2];
+          const year = deceasedMatch[3];
+          const month = valueTranslations[monthHebrew] || monthHebrew;
+          parsedData.dateofdeath = `${day} ${month} ${year}`;
+        }
+      }
+
+      // Address
+      if (line.includes("המען")) {
+        const addressMatch = line.match(/המען\s*:\s*(.+)/);
+        if (addressMatch) {
+          let address = addressMatch[1].trim();
+          // Split address into components
+          const addressParts = address.split(/\s+/);
+          if (addressParts.length >= 4) {
+            const city = valueTranslations[addressParts[0]] || addressParts[0];
+            const street = addressParts[1];
+            const number = addressParts[2];
+            const apartment =
+              valueTranslations[addressParts[3]] || addressParts[3];
+            address = `${city}, ${street} ${number}, ${apartment}`;
           }
+          parsedData.address = address;
         }
+      }
 
-        if (line.includes("הלאום")) {
-          const nationalityMatch = line.match(/הלאום\s*(\S+)/);
-          if (nationalityMatch)
-            parsedData.nationality =
-              valueTranslations[nationalityMatch[1]] || nationalityMatch[1];
-          const religionMatch = line.match(/הדת\s*(\S+)/);
-          if (religionMatch)
-            parsedData.religion =
-              valueTranslations[religionMatch[1]] || religionMatch[1];
+      // Date of Address Entry
+      if (line.includes("תאריך הכניסה למען")) {
+        const addressEntryMatch = line.match(
+          /תאריך הכניסה למען\s*:\s*(\d{1,2})\s*ב(\S+)/
+        );
+        if (addressEntryMatch) {
+          const day = addressEntryMatch[1];
+          const monthHebrew = addressEntryMatch[2];
+          const month = valueTranslations[monthHebrew] || monthHebrew;
+          // Look for the year in the next line or previous line
+          const yearMatch =
+            lines[index + 1]?.match(/(\d{4})/) ||
+            lines[index - 1]?.match(/(\d{4})/);
+          const year = yearMatch ? yearMatch[1] : "";
+          parsedData.addressentrydate = `${day} ${month} ${year}`;
         }
+      }
 
-        if (line.includes("נרשם") && line.includes("לשנת")) {
-          parsedData.dateofregistration = "1950";
+      // Previous Family Name
+      if (line.includes("שמות משפחה קודמים")) {
+        const prevNameMatch = lines[index + 2]?.match(
+          /(\S+)\s+שינוי\s+(\d{1,2})\s+ב(\S+)\s+(\d{4})/
+        );
+        if (prevNameMatch) {
+          const name = valueTranslations[prevNameMatch[1]] || prevNameMatch[1];
+          const day = prevNameMatch[2];
+          const monthHebrew = prevNameMatch[3];
+          const year = prevNameMatch[4];
+          const month = valueTranslations[monthHebrew] || monthHebrew;
+          parsedData.previousfamilyname = `${name} (changed on ${day} ${month} ${year})`;
         }
+      }
 
-        if (line.includes("הוצאה בלשכת")) {
-          const placeMatch = line.match(/בלשכת\s*(.+)/);
-          if (placeMatch) parsedData.placeofregistration = placeMatch[1].trim();
+      // Date Issued
+      if (line.includes("בתאריך")) {
+        const dateIssuedMatch = line.match(/(\d{1,2})\s*ב(\S+)\s*(\d{4})/);
+        if (dateIssuedMatch) {
+          const day = dateIssuedMatch[1];
+          const monthHebrew = dateIssuedMatch[2];
+          const year = dateIssuedMatch[3];
+          const month = valueTranslations[monthHebrew] || monthHebrew;
+          parsedData.dateissued = `${day} ${month} ${year}`;
         }
+      }
 
-        if (line.match(/\d{5,}/)) {
-          parsedData.reference = line.match(/\d{5,}/)[0];
+      // Place of Registration
+      if (line.includes("בלשכת רשות האוכלוסין")) {
+        const placeMatch = line.match(/בלשכת רשות האוכלוסין וההגירה ב(.+)/);
+        if (placeMatch) {
+          parsedData.placeofregistration =
+            valueTranslations[placeMatch[1].trim()] || placeMatch[1].trim();
         }
+      }
+      // Reference
+      if (line.match(/\d{5,}/)) {
+        parsedData.reference = line.match(/\d{5,}/)[0];
+      }
+    }
+
+    // Hebrew-specific parsing for birth certificate
+    if (templateType === "birth_certificate") {
+      // Family Name and First Name
+      // Extract family name
+      if (!parsedData.familyname && line.includes("שם המשפחה")) {
+        const familyMatch = line.match(/שם המשפחה\s*[:\-]?[\s\\]*([^\s\\|]+)/i);
+        if (familyMatch) {
+          parsedData.familyname = familyMatch[1].trim(); // e.g., "שורצברג"
+          console.log("Family Name:", parsedData.familyname); // Debugging line
+        }
+      }
+
+      // Extract first name
+      if (!parsedData.firstname && line.includes("השם הפרטי")) {
+        const firstMatch = line.match(/השם הפרטי\s*[:\-]?\s*([^\s\\|]+)/i);
+        if (firstMatch) {
+          parsedData.firstname = firstMatch[1].trim(); // e.g., "עודד"
+          console.log("First Name:", parsedData.firstname); // Debugging line
+        }
+      }
+
+      if (line.includes("של האב ")) {
+        const fatherMatch = line.match(/של האב\s+(\S+)/);
+        if (fatherMatch) parsedData.fathersname = fatherMatch[1];
+      }
+
+      if (line.includes("של האם")) {
+        const motherMatch = line.match(/של האם\s*(\S+)/);
+        if (motherMatch) parsedData.mothersname = motherMatch[1];
+      }
+
+      if (line.includes("שלאבי האב ")) {
+        const grandfatherMatch = line.match(/שלאבי האב \s*(\S+)/);
+        if (grandfatherMatch) parsedData.grandfathername = grandfatherMatch[1];
+        else if (line.includes("שלאבי האב "))
+          parsedData.grandfathername = lines[index]
+            ?.replace("שלאבי האב ", "")
+            .trim();
+      }
+
+      if (line.includes("המין")) {
+        const genderMatch = line.match(/המין\s*(נקבה|זכר)/i);
+        if (genderMatch)
+          parsedData.gender =
+            valueTranslations[genderMatch[1]] || genderMatch[1];
+        const idMatch = line.match(/מספר הזהות\s*(\d{7,9}|\d+\s*\d*)/);
+
+        console.log("ID Match:", idMatch); // Debugging line
+        if (idMatch) {
+          // Doing RTL with first digit at the beginning
+          const idString = idMatch[1].replace(/\s/g, ""); // Remove spaces, e.g., "021470919"
+          const firstElement = idString[0]; // Get the first digit: "0"
+          const remaining = idString.slice(1); // Get the rest: "21470919"
+          console.log("Remaining:", remaining); // Debugging line
+          const cleaned = remaining.split("").reverse().join(""); // Reverse the rest: "91907412"
+          const last = firstElement + cleaned; // Combine: "0" + "91907412" = "091907412"
+          console.log("Last:", last); // Debugging line
+          parsedData.idnumber = parsedData.idnumber = last
+            .split("")
+            .reverse()
+            .join(""); // Assign to parsedData
+        }
+      }
+
+      if (line.includes("שם הישוב")) {
+        const placeMatch = line.match(/שם הישוב\s*(.+?)(?=שם בית|$)/);
+        if (placeMatch) parsedData.placeofbirth = placeMatch[1].trim();
+      }
+
+      if (line.includes("שם בית החולים")) {
+        const hospitalMatch = line.match(/שם בית החולים\s*(.+)/);
+        if (hospitalMatch)
+          parsedData.hospitalname = hospitalMatch[1]
+            .trim()
+            .replace(/[^\u0590-\u05FF]/g, "");
+      }
+
+      if (line.includes("תאריך הלידה")) {
+        const gregorianMatch = lines[index + 1]?.match(
+          /הגריגוריאני\s*(\d{1,2})\s*ב(\S+)\s*(\d{4})/
+        );
+        if (gregorianMatch) {
+          const day = gregorianMatch[1];
+          const monthHebrew = gregorianMatch[2];
+          const year = gregorianMatch[3];
+          const monthMap = {
+            ינואר: "January",
+            פברואר: "February",
+            מרץ: "March",
+            אפריל: "April",
+            מאי: "May",
+            יוני: "June",
+            יולי: "July",
+            אוגוסט: "August",
+            ספטמבר: "September",
+            אוקטובר: "October",
+            נובמבר: "November",
+            דצמבר: "December",
+          };
+          const month = monthMap[monthHebrew] || monthHebrew;
+          parsedData.dateofbirth = `${day} ${month} ${year}`;
+        }
+      }
+
+      if (line.includes("הלאום")) {
+        const nationalityMatch = line.match(/הלאום\s*[:\-]?\s*(\S+)/i);
+        if (nationalityMatch) {
+          let cleanedNationality = nationalityMatch[1]
+            .replace(/[^\u0590-\u05FF]/g, "")
+            .trim();
+          parsedData.nationality = cleanedNationality;
+        }
+      }
+      if (!parsedData.nationality) {
+        parsedData.nationality = "יהודי";
+
+        const religionMatch = line.match(/הדת\s*(\S+)/);
+        if (religionMatch)
+          parsedData.religion =
+            valueTranslations[religionMatch[1]] || religionMatch[1];
+      }
+
+      if (line.includes("הוצאה בלשכת")) {
+        const placeMatch = line.match(/בלשכת\s*(.+)/);
+        if (placeMatch) parsedData.placeofregistration = placeMatch[1].trim();
+      }
+
+      if (line.match(/\d{5,}/)) {
+        parsedData.reference = line.match(/\d{5,}/)[0];
       }
     }
 
@@ -1205,6 +1288,7 @@ function parseHebrewFields(text, templateType) {
         "Name of hospital": "hospitalname",
         Nationality: "nationality",
         Religion: "religion",
+        motherfather: "motherfather",
       };
 
       // Parse fields that should take the left-side English value
@@ -1237,6 +1321,19 @@ function parseHebrewFields(text, templateType) {
       }
 
       // Special handling for Mother's Name (left-side English value after "of mother")
+      if (line.includes("of mother's father")) {
+        const motherMatch = line.match(
+          /of mother's father\s+(.+?)(?:\\s*[\u0590-\u05FF\\u200F\\u200E]|$)/
+        );
+        if (motherMatch) {
+          let value = motherMatch[1].trim();
+          value = value.replace(/[\u0590-\u05FF\u200F\u200E].*$/, "").trim();
+          parsedData.motherfather = value;
+          console.log(`Mother's name (left side): ${parsedData.motherfather}`);
+        }
+      }
+
+      // Special handling for Mother's Name (left-side English value after "of mother")
       if (line.includes("of mother")) {
         const motherMatch = line.match(
           /of mother\s+(.+?)(?:\\s*[\u0590-\u05FF\\u200F\\u200E]|$)/
@@ -1265,10 +1362,10 @@ function parseHebrewFields(text, templateType) {
       }
 
       // Enhanced Place of Birth extraction
-      if (line.includes("Place of")) {
+      if (line.includes("Place")) {
         // First try: Capture between "נולד ב :" and any Hebrew text or formatting marks
         let birthMatch = line.match(
-          /נולד ב\s*:\s*([A-Z]+)(?=[\u0590-\u05FF\u200F\u200E]|\s*Place of)/
+          /(נולד(?:\sב|\s*ב|\sב*)|birth)\s*[:\-]?\s*([A-Z\s]+)/i
         );
         console.log(`Raw birthMatch captured value: ${birthMatch}`);
 
@@ -1886,6 +1983,10 @@ async function loadTemplate(type) {
           justify-content: space-between;
           font-size: 10px;
           margin-top: 20px;
+
+        .rtl {
+          direction: rtl;
+          unicode-bidi: bidi-override; /* Force RTL for numbers like ID */
         }
       </style>
       <div class="certificate avoid-break">
@@ -1934,9 +2035,9 @@ async function loadTemplate(type) {
               extractedData.gender || ""
             }</span>
           </div>
-          <div class="field">
+          <div class="field rtl">
             <span class="label">ID Number:</span>
-            <span class="value" contenteditable="true">${
+            <span class="value" contenteditable="true" rtl>${
               extractedData.idnumber || ""
             }</span>
           </div>
@@ -2304,6 +2405,12 @@ async function loadTemplate(type) {
               extractedData.grandfathername || ""
             }</span>
           </div>
+       <div class="field">
+            <span class="label">Surname of mother's father:</span>
+            <span class="value" contenteditable="true">${
+              extractedData.motherfather || ""
+            }</span>
+          </div> 
           <div class="field">
             <span class="label">Sex:</span>
             <span class="value" contenteditable="true">${
@@ -2840,48 +2947,3 @@ function showSummary() {
   }
   alert(summary);
 }
-
-// // Translate the field labels and known values
-// function translateTemplateToGerman() {
-//   const fields = document.querySelectorAll(".template .field");
-
-//   fields.forEach((field) => {
-//     const labelEl = field.querySelector(".label");
-//     const valueEl = field.querySelector(".value");
-
-//     if (labelEl) {
-//       const labelText = labelEl.textContent.trim();
-//       const translatedLabel = translations[labelText] || labelText;
-//       labelEl.textContent = translatedLabel;
-//     }
-
-//     if (valueEl) {
-//       const valueText = valueEl.textContent.trim();
-//       const translatedValue = translations[valueText] || valueText;
-//       valueEl.textContent = translatedValue;
-//     }
-//   });
-// }
-
-// // Export only the `.template` section to PDF
-// function exportFullTemplateToPDF() {
-//   translateTemplateToGerman(); // Step 1: Translate before export
-
-//   const template = document.querySelector(".template");
-//   if (!template) {
-//     alert("No template content found!");
-//     return;
-//   }
-
-//   const clone = template.cloneNode(true);
-//   const container = document.createElement("div");
-//   container.appendChild(clone);
-
-//   html2pdf().from(container).set({
-//     margin: 0.5,
-//     filename: "translated_document.pdf",
-//     image: { type: "jpeg", quality: 0.98 },
-//     html2canvas: { scale: 2 },
-//     jsPDF: { unit: "in", format: "a4", orientation: "portrait" }
-//   }).save();
-// }

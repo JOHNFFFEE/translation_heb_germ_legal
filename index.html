@@ -5,6 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PDF to Template App</title>
     <link rel="stylesheet" href="styles.css" />
+
+    <style>
+      /* Spinner CSS */
+      #spinner {
+        display: none; /* Hidden by default */
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 40px;
+        height: 40px;
+        border: 4px solid #f3f3f3;
+        border-top: 4px solid #3498db;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+        z-index: 1000;
+      }
+      @keyframes spin {
+        0% {
+          transform: translate(-50%, -50%) rotate(0deg);
+        }
+        100% {
+          transform: translate(-50%, -50%) rotate(360deg);
+        }
+      }
+    </style>
   </head>
   <body>
     <div class="container">
@@ -29,8 +55,9 @@
         <button onclick="processPDF()">Process PDF</button>
       </div>
       <div class="template-section" id="template-section">
-        <!-- Template will be loaded here -->
+        <script src="script.js" defer></script>
       </div>
+
       <div class="actions">
         <button onclick="addField()">Add Field</button>
         <button onclick="addRow()">Add Row (table)</button>
@@ -42,6 +69,7 @@
 
         <!-- <button onclick="translateToGerman()">Translate to German</button> -->
         <button onclick="exportToPDF()">Export to PDF</button>
+        <div id="spinner"></div>
         <!-- <button onclick="showSummary()">Show Summary</button> -->
       </div>
     </div>
@@ -50,6 +78,5 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js"></script>
-    <script src="script.js"></script>
   </body>
 </html>
